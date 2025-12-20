@@ -32,6 +32,7 @@ class Bag;
 class Field;
 class QueryResult;
 class Unit;
+class Player;
 struct ItemRandomPropertiesEntry;
 
 struct ItemSetEffect
@@ -262,7 +263,7 @@ class Item : public Object
         bool IsBindedNotWith(Player const* player) const;
         bool IsBoundByEnchant() const;
         virtual void SaveToDB();
-        virtual bool LoadFromDB(uint32 guidLow, ObjectGuid ownerGuid, Field* fields, uint32 entry);
+        virtual bool LoadFromDB(uint32 guidLow, ObjectGuid ownerGuid, Field* fields, uint32 entry, int tradeTimeIndex = -1, int tradePlayersIndex = -1);
         virtual void DeleteFromDB();
         void DeleteFromInventoryDB();
         void LoadLootFromDB(Field* fields);
@@ -290,9 +291,13 @@ class Item : public Object
         bool IsNotEmptyBag() const;
 #endif
         bool IsBroken() const { return GetUInt32Value(ITEM_FIELD_MAXDURABILITY) > 0 && GetUInt32Value(ITEM_FIELD_DURABILITY) == 0; }
-        bool CanBeTraded() const;
+        bool CanBeTraded(Player const* target = nullptr);
         void SetInTrade(bool b = true) { mb_in_trade = b; }
         bool IsInTrade() const { return mb_in_trade; }
+        void InitializeLootTradeData(Loot const& loot, Player* owner);
+        void EnsureRaidLootTradeWindow(Player* owner);
+        bool HasActiveLootTradeWindow() const;
+        bool CheckLootTradeAllowed(Player* actor, Player* target, bool sendErrorMessage);
 
         bool IsFitToSpellRequirements(SpellEntry const* spellInfo) const;
         bool IsTargetValidForItemUse(Unit* pUnitTarget);
@@ -367,6 +372,13 @@ class Item : public Object
         static void GetLocalizedNameWithSuffix(std::string& name, ItemPrototype const* proto, ItemRandomPropertiesEntry const* randomProp, int dbLocale, LocaleConstant dbcLocale);
 
     private:
+        bool HasLootTradeData() const { return m_lootTradeExpiry != 0 && !m_lootTradeEligible.empty(); }
+        bool IsLootTradeExpired() const;
+        bool IsEligibleLootTrader(Player const* target) const;
+        void ClearLootTradeData();
+        void LoadLootTradeData(uint32 expireTime, std::string const& eligibleGuids, bool& need_save);
+        std::string SerializeLootTradeEligible() const;
+
         bool generatedLoot;
         uint8 m_slot;
         Bag* m_container;
@@ -374,6 +386,8 @@ class Item : public Object
         int16 uQueuePos;
         bool mb_in_trade;                                   // true if item is currently in trade-window
         ItemLootUpdateState m_lootState;
+        uint32 m_lootTradeExpiry;                           // unix time until which the item can be traded among raid participants
+        std::vector<ObjectGuid> m_lootTradeEligible;        // list of raid participants eligible for temporary trade
 };
 
 #endif

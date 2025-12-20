@@ -4784,7 +4784,7 @@ void Player::DeleteFromDB(ObjectGuid playerGuid, uint32 accountId, bool updateRe
                     if (has_items)
                     {
                         // data needs to be at first place for Item::LoadFromDB      0               1                    2        3                      5        6               7                     8             9       10                           11         12
-                        QueryResult* resultItems = CharacterDatabase.PQuery("SELECT `creator_guid`, `gift_creator_guid`, `count`, `duration`, `charges`, `flags`, `enchantments`, `random_property_id`, `durability`, `text`, `item_guid`, `item_instance`.`item_id`, `generated_loot` FROM `mail_items` JOIN `item_instance` ON `item_guid` = `guid` WHERE `mail_id`='%u'", mail_id);
+                        QueryResult* resultItems = CharacterDatabase.PQuery("SELECT `creator_guid`, `gift_creator_guid`, `count`, `duration`, `charges`, `flags`, `enchantments`, `random_property_id`, `durability`, `text`, `item_guid`, `item_instance`.`item_id`, `generated_loot`, `loot_trade_expire`, `loot_trade_players` FROM `mail_items` JOIN `item_instance` ON `item_guid` = `guid` WHERE `mail_id`='%u'", mail_id);
                         if (resultItems)
                         {
                             do
@@ -4802,7 +4802,7 @@ void Player::DeleteFromDB(ObjectGuid playerGuid, uint32 accountId, bool updateRe
                                 }
 
                                 Item* pItem = NewItemOrBag(itemProto);
-                                if (!pItem->LoadFromDB(itemGuidLow, playerGuid, fields2, itemId))
+                                if (!pItem->LoadFromDB(itemGuidLow, playerGuid, fields2, itemId, 13, 14))
                                 {
                                     pItem->FSetState(ITEM_REMOVED);
                                     pItem->SaveToDB();              // it also deletes item object !
@@ -10577,10 +10577,16 @@ Item* Player::_StoreItem(uint16 pos, Item* pItem, uint32 count, bool clone, bool
         if (!pItem)
             return nullptr;
 
-        if (pItem->GetProto()->Bonding == BIND_WHEN_PICKED_UP ||
+        bool deferBind = pItem->HasActiveLootTradeWindow();
+        if (!deferBind && (pItem->GetProto()->Bonding == BIND_WHEN_PICKED_UP ||
                 pItem->GetProto()->Bonding == BIND_QUEST_ITEM ||
-                (pItem->GetProto()->Bonding == BIND_WHEN_EQUIPPED && IsBagPos(pos)))
-            pItem->SetBinding(true);
+                (pItem->GetProto()->Bonding == BIND_WHEN_EQUIPPED && IsBagPos(pos))))
+        {
+            if (Map* map = GetMap())
+                deferBind = map->IsRaid();
+            if (!deferBind)
+                pItem->SetBinding(true);
+        }
 
         if (bag == INVENTORY_SLOT_BAG_0)
         {
@@ -10617,15 +10623,22 @@ Item* Player::_StoreItem(uint16 pos, Item* pItem, uint32 count, bool clone, bool
 
         AddEnchantmentDurations(pItem);
         AddItemDurations(pItem);
+        pItem->EnsureRaidLootTradeWindow(this);
 
         return pItem;
     }
     else
     {
-        if (pItem2->GetProto()->Bonding == BIND_WHEN_PICKED_UP ||
+        bool deferBind2 = pItem2->HasActiveLootTradeWindow();
+        if (!deferBind2 && (pItem2->GetProto()->Bonding == BIND_WHEN_PICKED_UP ||
                 pItem2->GetProto()->Bonding == BIND_QUEST_ITEM ||
-                (pItem2->GetProto()->Bonding == BIND_WHEN_EQUIPPED && IsBagPos(pos)))
-            pItem2->SetBinding(true);
+                (pItem2->GetProto()->Bonding == BIND_WHEN_EQUIPPED && IsBagPos(pos))))
+        {
+            if (Map* map = GetMap())
+                deferBind2 = map->IsRaid();
+            if (!deferBind2)
+                pItem2->SetBinding(true);
+        }
 
         pItem2->SetCount(pItem2->GetCount() + count);
         if (IsInWorld() && update)
@@ -15856,7 +15869,7 @@ bool Player::_LoadInventory(QueryResult* result, uint32 timediff, bool& hasEpicM
              */
             item->SetGeneratedLoot(fields[14].GetBool());
 
-            if (!item->LoadFromDB(item_lowguid, GetObjectGuid(), fields, item_id))
+            if (!item->LoadFromDB(item_lowguid, GetObjectGuid(), fields, item_id, 15, 16))
             {
                 sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "Player::_LoadInventory: Player %s has broken item (id: #%u) in inventory, deleted.", GetName(), item_id);
                 CharacterDatabase.PExecute("DELETE FROM `character_inventory` WHERE `item_guid` = '%u'", item_lowguid);
@@ -20702,6 +20715,8 @@ void Player::AutoStoreLoot(Loot& loot, bool broadcast, uint8 bag, uint8 slot)
 
         SendNotifyLootItemRemoved(i);
         Item* pItem = StoreNewItem(dest, lootItem->itemid, true, lootItem->randomPropertyId);
+        if (pItem)
+            pItem->InitializeLootTradeData(loot, this);
         SendNewItem(pItem, lootItem->count, false, false, broadcast);
     }
 }

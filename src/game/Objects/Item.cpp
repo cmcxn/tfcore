@@ -28,6 +28,8 @@
 #include "Database/DatabaseEnv.h"
 #include "ItemEnchantmentMgr.h"
 #include "GuildMgr.h"
+#include "Map.h"
+#include "Group.h"
 #ifdef ENABLE_ELUNA
 #include "LuaEngine.h"
 #endif /* ENABLE_ELUNA */
@@ -93,6 +95,7 @@ void AddItemsSetItem(Player* player, Item* item)
         }
     }
 }
+
 
 void RemoveItemsSetItem(Player* player, ItemPrototype const* proto)
 {
@@ -198,6 +201,8 @@ Item::Item() : loot(nullptr)
     mb_in_trade = false;
     m_lootState = ITEM_LOOT_NONE;
     generatedLoot = false;
+    m_lootTradeExpiry = 0;
+    m_lootTradeEligible.clear();
 }
 
 bool Item::Create(uint32 guidlow, uint32 itemid, ObjectGuid ownerGuid)
@@ -265,6 +270,150 @@ void Item::UpdateDuration(Player* owner, uint32 diff)
     SetState(ITEM_CHANGED, owner);                          // save new time in database
 }
 
+bool Item::IsLootTradeExpired() const
+{
+    return m_lootTradeExpiry && time(nullptr) >= m_lootTradeExpiry;
+}
+
+bool Item::IsEligibleLootTrader(Player const* target) const
+{
+    if (!target)
+        return false;
+
+    for (const auto& guid : m_lootTradeEligible)
+        if (guid == target->GetObjectGuid())
+            return true;
+
+    return false;
+}
+
+void Item::ClearLootTradeData()
+{
+    m_lootTradeExpiry = 0;
+    m_lootTradeEligible.clear();
+}
+
+std::string Item::SerializeLootTradeEligible() const
+{
+    std::ostringstream ssTradePartners;
+    for (const auto& guid : m_lootTradeEligible)
+        ssTradePartners << guid.GetRawValue() << ' ';
+    return ssTradePartners.str();
+}
+
+void Item::LoadLootTradeData(uint32 expireTime, std::string const& eligibleGuids, bool& need_save)
+{
+    m_lootTradeExpiry = expireTime;
+    m_lootTradeEligible.clear();
+
+    if (!m_lootTradeExpiry || eligibleGuids.empty())
+        return;
+
+    Tokenizer tokens(eligibleGuids, ' ');
+    for (Tokenizer::const_iterator itr = tokens.begin(); itr != tokens.end(); ++itr)
+    {
+        uint64 rawGuid = 0;
+        std::istringstream(*itr) >> rawGuid;
+        if (rawGuid)
+            m_lootTradeEligible.emplace_back(rawGuid);
+    }
+
+    if (IsLootTradeExpired())
+    {
+        ClearLootTradeData();
+        need_save = true;
+    }
+}
+
+void Item::InitializeLootTradeData(Loot const& loot, Player* owner)
+{
+    Map* map = owner ? owner->GetMap() : nullptr;
+    if (!map || !map->IsRaid())
+        return;
+
+    ItemPrototype const* proto = GetProto();
+    if (!proto || proto->Bonding != BIND_WHEN_PICKED_UP)
+        return;
+
+    if (!loot.IsAllowedLooter(owner->GetObjectGuid()))
+        return;
+
+    m_lootTradeEligible.clear();
+    m_lootTradeEligible.reserve(loot.GetAllowedLooters().size());
+    for (const auto& guid : loot.GetAllowedLooters())
+        if (!guid.IsEmpty())
+            m_lootTradeEligible.push_back(guid);
+
+    if (m_lootTradeEligible.empty())
+        m_lootTradeEligible.push_back(owner->GetObjectGuid());
+
+    m_lootTradeExpiry = static_cast<uint32>(time(nullptr) + 2 * HOUR);
+    SetState(ITEM_CHANGED, owner);
+}
+
+bool Item::HasActiveLootTradeWindow() const
+{
+    return HasLootTradeData() && !IsLootTradeExpired();
+}
+
+bool Item::CheckLootTradeAllowed(Player* actor, Player* target, bool sendErrorMessage)
+{
+    if (!HasLootTradeData())
+        return true;
+
+    if (IsLootTradeExpired())
+    {
+        SetBinding(true);
+        ClearLootTradeData();
+        if (Player* owner = GetOwner())
+            SetState(ITEM_CHANGED, owner);
+
+        if (actor && sendErrorMessage)
+            actor->GetSession()->SendNotification("The raid loot trade window for this item has expired.");
+        return false;
+    }
+
+    if (!target || !IsEligibleLootTrader(target))
+    {
+        if (actor && sendErrorMessage)
+            actor->GetSession()->SendNotification("You can only trade this item with players who participated in the raid loot kill.");
+        return false;
+    }
+
+    return true;
+}
+
+void Item::EnsureRaidLootTradeWindow(Player* owner)
+{
+    if (HasLootTradeData() || !owner)
+        return;
+
+    Map* map = owner->GetMap();
+    if (!map || !map->IsRaid())
+        return;
+
+    ItemPrototype const* proto = GetProto();
+    if (!proto || proto->Bonding != BIND_WHEN_PICKED_UP)
+        return;
+
+    m_lootTradeEligible.clear();
+    if (Group* group = owner->GetGroup())
+    {
+        for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+        {
+            Player* member = itr->getSource();
+            if (member && member->IsInWorld() && member->GetMap() == map)
+                m_lootTradeEligible.push_back(member->GetObjectGuid());
+        }
+    }
+
+    if (m_lootTradeEligible.empty())
+        m_lootTradeEligible.push_back(owner->GetObjectGuid());
+
+    m_lootTradeExpiry = static_cast<uint32>(time(nullptr) + 2 * HOUR);
+    SetState(ITEM_CHANGED, owner);
+}
+
 void Item::SaveToDB()
 {
     uint32 guid = GetGUIDLow();
@@ -286,9 +435,9 @@ void Item::SaveToDB()
             static SqlStatementID updItem;
 
             SqlStatement stmt = (uState == ITEM_NEW) ?
-                                CharacterDatabase.CreateStatement(insItem, "REPLACE INTO `item_instance` (`item_id`, `owner_guid`, `creator_guid`, `gift_creator_guid`, `count`, `duration`, `charges`, `flags`, `enchantments`, `random_property_id`, `durability`, `text`, `generated_loot`, `guid`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                                CharacterDatabase.CreateStatement(insItem, "REPLACE INTO `item_instance` (`item_id`, `owner_guid`, `creator_guid`, `gift_creator_guid`, `count`, `duration`, `charges`, `flags`, `enchantments`, `random_property_id`, `durability`, `text`, `generated_loot`, `loot_trade_expire`, `loot_trade_players`, `guid`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                                 :
-                                CharacterDatabase.CreateStatement(updItem, "UPDATE `item_instance` SET `item_id` = ?, `owner_guid` = ?, `creator_guid` = ?, `gift_creator_guid` = ?, `count` = ?, `duration` = ?, `charges` = ?, `flags` = ?, `enchantments` = ?, `random_property_id` = ?, `durability` = ?, `text` = ?, `generated_loot` = ? WHERE `guid` = ?");
+                                CharacterDatabase.CreateStatement(updItem, "UPDATE `item_instance` SET `item_id` = ?, `owner_guid` = ?, `creator_guid` = ?, `gift_creator_guid` = ?, `count` = ?, `duration` = ?, `charges` = ?, `flags` = ?, `enchantments` = ?, `random_property_id` = ?, `durability` = ?, `text` = ?, `generated_loot` = ?, `loot_trade_expire` = ?, `loot_trade_players` = ? WHERE `guid` = ?");
             stmt.addUInt32(GetEntry());
             stmt.addUInt32(GetOwnerGuid().GetCounter());
             stmt.addUInt32(GetGuidValue(ITEM_FIELD_CREATOR).GetCounter());
@@ -316,6 +465,8 @@ void Item::SaveToDB()
             stmt.addUInt16(GetUInt32Value(ITEM_FIELD_DURABILITY));
             stmt.addUInt32(GetUInt32Value(ITEM_FIELD_ITEM_TEXT_ID));
             stmt.addUInt8(generatedLoot); // can't use bool, SQL ERROR: Using unsupported buffer type: 16  (parameter: 13), todo, maybe.
+            stmt.addUInt32(m_lootTradeExpiry);
+            stmt.addString(SerializeLootTradeEligible());
             stmt.addUInt32(guid);
             stmt.Execute();
         }
@@ -412,10 +563,10 @@ void Item::SaveToDB()
     SetState(ITEM_UNCHANGED);
 }
 
-bool Item::LoadFromDB(uint32 guidLow, ObjectGuid ownerGuid, Field* fields, uint32 entry)
+bool Item::LoadFromDB(uint32 guidLow, ObjectGuid ownerGuid, Field* fields, uint32 entry, int tradeTimeIndex /*= -1*/, int tradePlayersIndex /*= -1*/)
 {
-    //         0            1                  2      3         4        5      6             7                   8           9     10         11
-    // SELECT creator_guid, gift_creator_guid, count, duration, charges, flags, enchantments, random_property_id, durability, text, item_guid, item_id
+    //         0            1                  2      3         4        5      6             7                   8           9     10         11            [12]               [13]
+    // SELECT creator_guid, gift_creator_guid, count, duration, charges, flags, enchantments, random_property_id, durability, text, item_guid, item_id, [generated_loot], [loot_trade_expire], [loot_trade_players]
     // create item before any checks for store correct guid
     // and allow use "FSetState(ITEM_REMOVED); SaveToDB();" for deleting item from DB
     Object::_Create(guidLow, 0, HIGHGUID_ITEM);
@@ -475,6 +626,11 @@ bool Item::LoadFromDB(uint32 guidLow, ObjectGuid ownerGuid, Field* fields, uint3
 
     SetUInt32Value(ITEM_FIELD_ITEM_TEXT_ID, fields[9].GetUInt32());
 
+    if (tradeTimeIndex >= 0 && tradePlayersIndex >= 0)
+        LoadLootTradeData(fields[tradeTimeIndex].GetUInt32(), fields[tradePlayersIndex].GetString(), need_save);
+    else
+        ClearLootTradeData();
+
     // set correct wrapped state
     if (HasFlag(ITEM_FIELD_FLAGS, ITEM_DYNFLAG_WRAPPED))
     {
@@ -496,11 +652,13 @@ bool Item::LoadFromDB(uint32 guidLow, ObjectGuid ownerGuid, Field* fields, uint3
     {
         static SqlStatementID updItem;
 
-        SqlStatement stmt = CharacterDatabase.CreateStatement(updItem, "UPDATE `item_instance` SET `duration` = ?, `flags` = ?, `durability` = ? WHERE `guid` = ?");
+        SqlStatement stmt = CharacterDatabase.CreateStatement(updItem, "UPDATE `item_instance` SET `duration` = ?, `flags` = ?, `durability` = ?, `loot_trade_expire` = ?, `loot_trade_players` = ? WHERE `guid` = ?");
 
         stmt.addUInt32(GetUInt32Value(ITEM_FIELD_DURATION));
         stmt.addUInt32(GetUInt32Value(ITEM_FIELD_FLAGS));
         stmt.addUInt32(GetUInt32Value(ITEM_FIELD_DURABILITY));
+        stmt.addUInt32(m_lootTradeExpiry);
+        stmt.addString(SerializeLootTradeEligible());
         stmt.addUInt32(guidLow);
         stmt.Execute();
     }
@@ -932,14 +1090,27 @@ bool Item::IsEquipped() const
     return !IsInBag() && m_slot < EQUIPMENT_SLOT_END;
 }
 
-bool Item::CanBeTraded() const
+bool Item::CanBeTraded(Player const* target)
 {
-    if (IsSoulBound())
+    Player* owner = GetOwner();
+    bool hasLootTrade = HasLootTradeData();
+    if (hasLootTrade && IsLootTradeExpired())
+    {
+        SetBinding(true);
+        ClearLootTradeData();
+        hasLootTrade = false;
+        if (owner)
+            SetState(ITEM_CHANGED, owner);
+    }
+
+    bool targetEligible = hasLootTrade && target && IsEligibleLootTrader(target);
+
+    if (IsSoulBound() && !targetEligible)
         return false;
     if (IsBag() && (Player::IsBagPos(GetPos()) || !((Bag const*)this)->IsEmpty()))
         return false;
 
-    if (Player* owner = GetOwner())
+    if (owner)
     {
         if (owner->CanUnequipItem(GetPos(), false) !=  EQUIP_ERR_OK)
             return false;
@@ -950,7 +1121,7 @@ bool Item::CanBeTraded() const
     if (HasGeneratedLoot())
         return false;
 
-    if (IsBoundByEnchant())
+    if (IsBoundByEnchant() && !targetEligible)
         return false;
 
     return true;
@@ -1142,6 +1313,8 @@ Item* Item::CloneItem(uint32 count, Player const* player) const
     newItem->SetUInt32Value(ITEM_FIELD_DURATION,  GetUInt32Value(ITEM_FIELD_DURATION));
     newItem->SetItemRandomProperties(GetItemRandomPropertyId());
     newItem->generatedLoot = generatedLoot;
+    newItem->m_lootTradeExpiry = m_lootTradeExpiry;
+    newItem->m_lootTradeEligible = m_lootTradeEligible;
     return newItem;
 }
 
