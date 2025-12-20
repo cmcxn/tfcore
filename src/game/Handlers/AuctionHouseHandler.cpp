@@ -336,6 +336,12 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recv_data)
         return;
     }
 
+    if (it->HasActiveLootTradeWindow())
+    {
+        SendAuctionCommandResult(nullptr, AUCTION_STARTED, AUCTION_ERR_INVENTORY, EQUIP_ERR_ITEM_NOT_FOUND);
+        return;
+    }
+
     if (!it->CanBeTraded())
     {
         SendAuctionCommandResult(nullptr, AUCTION_STARTED, AUCTION_ERR_INVENTORY, EQUIP_ERR_ITEM_NOT_FOUND);
