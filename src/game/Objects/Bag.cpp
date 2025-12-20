@@ -94,9 +94,9 @@ void Bag::SaveToDB()
     Item::SaveToDB();
 }
 
-bool Bag::LoadFromDB(uint32 guidLow, ObjectGuid ownerGuid, Field* fields, uint32 entry)
+bool Bag::LoadFromDB(uint32 guidLow, ObjectGuid ownerGuid, Field* fields, uint32 entry, int tradeTimeIndex /*= -1*/, int tradePlayersIndex /*= -1*/)
 {
-    if (!Item::LoadFromDB(guidLow, ownerGuid, fields, entry))
+    if (!Item::LoadFromDB(guidLow, ownerGuid, fields, entry, tradeTimeIndex, tradePlayersIndex))
         return false;
 
     ItemPrototype const* itemProto = GetProto(); // checked in Item::LoadFromDB

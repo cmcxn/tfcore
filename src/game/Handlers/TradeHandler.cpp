@@ -309,7 +309,7 @@ void WorldSession::HandleAcceptTradeOpcode(WorldPacket& recvPacket)
     {
         if (Item* item = my_trade->GetItem(TradeSlots(i)))
         {
-            if (!item->CanBeTraded())
+            if (!item->CheckLootTradeAllowed(_player, trader, true) || !item->CanBeTraded(trader))
             {
                 SendTradeStatus(TRADE_STATUS_TRADE_CANCELED);
                 return;
@@ -318,7 +318,7 @@ void WorldSession::HandleAcceptTradeOpcode(WorldPacket& recvPacket)
 
         if (Item* item  = his_trade->GetItem(TradeSlots(i)))
         {
-            if (!item->CanBeTraded())
+            if (!item->CheckLootTradeAllowed(trader, _player, true) || !item->CanBeTraded(_player))
             {
                 SendTradeStatus(TRADE_STATUS_TRADE_CANCELED);
                 return;
@@ -713,7 +713,7 @@ void WorldSession::HandleSetTradeItemOpcode(WorldPacket& recvPacket)
 
     // check cheating, can't fail with correct client operations
     Item* item = _player->GetItemByPos(bag, slot);
-    if (!item || (tradeSlot != TRADE_SLOT_NONTRADED && !item->CanBeTraded()))
+    if (!item || (tradeSlot != TRADE_SLOT_NONTRADED && (!item->CheckLootTradeAllowed(_player, my_trade->GetTrader(), true) || !item->CanBeTraded(my_trade->GetTrader()))))
     {
         SendTradeStatus(TRADE_STATUS_TRADE_CANCELED);
         return;

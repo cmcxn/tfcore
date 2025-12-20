@@ -214,8 +214,8 @@ void MasterPlayer::AddNewMailDeliverTime(time_t deliver_time)
 void MasterPlayer::LoadMailedItems(QueryResult* result)
 {
     // data needs to be at first place for Item::LoadFromDB
-    // 0             1                  2      3         4        5      6             7                   8           9     10       11         12       13
-    // creator_guid, gift_creator_guid, count, duration, charges, flags, enchantments, random_property_id, durability, text, mail_id, item_guid, item_id, generated_loot
+    // 0             1                  2      3         4        5      6             7                   8           9     10       11         12       13               14                  15
+    // creator_guid, gift_creator_guid, count, duration, charges, flags, enchantments, random_property_id, durability, text, mail_id, item_guid, item_id, generated_loot, loot_trade_expire, loot_trade_players
     if (!result)
         return;
 
@@ -250,7 +250,7 @@ void MasterPlayer::LoadMailedItems(QueryResult* result)
          */
         item->SetGeneratedLoot(fields[13].GetBool());
 
-        if (!item->LoadFromDB(itemGuidLow, GetObjectGuid(), fields, itemId))
+        if (!item->LoadFromDB(itemGuidLow, GetObjectGuid(), fields, itemId, 14, 15))
         {
             sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "Player::_LoadMailedItems - Item in mail (%u) doesn't exist !!!! - item guid: %u, deleted from mail", mail->messageID, itemGuidLow);
             CharacterDatabase.PExecute("DELETE FROM `mail_items` WHERE `item_guid` = '%u'", itemGuidLow);
