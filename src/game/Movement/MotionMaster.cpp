@@ -439,6 +439,13 @@ void MotionMaster::MoveFollow(Unit* target, float dist, float angle)
     if (!target)
         return;
 
+    // Disable player-to-player following in dungeons/instances
+    if (m_owner->IsPlayer() && target->IsPlayer())
+    {
+        if (m_owner->GetMap()->IsDungeon())
+            return;
+    }
+
     DEBUG_FILTER_LOG(LOG_FILTER_AI_AND_MOVEGENSS, "%s follow to %s", m_owner->GetGuidStr().c_str(), target->GetGuidStr().c_str());
 
     if (m_owner->IsPlayer())
