@@ -20,6 +20,7 @@
 #include "Totem.h"
 #include "CreatureAI.h"
 #include "Chat.h"
+#include "Player.h"
 #include "Spell.h"
 #include "SpellAuras.h"
 #include "World.h"
@@ -759,6 +760,9 @@ void SpellCaster::SendHealSpellLog(Unit const* pVictim, uint32 SpellID, uint32 D
     // data << uint8(0);                                    // [-ZERO]
     SendMessageToSet(&data, true);
 #endif
+
+    if (Player* player = const_cast<SpellCaster*>(this)->ToPlayer())
+        player->UpdateAutoHealTracking(pVictim);
 }
 
 void SpellCaster::EnergizeBySpell(Unit* pVictim, uint32 SpellID, uint32 Damage, Powers powertype)
