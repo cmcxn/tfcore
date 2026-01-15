@@ -369,14 +369,14 @@ bool Item::CheckLootTradeAllowed(Player* actor, Player* target, bool sendErrorMe
             SetState(ITEM_CHANGED, owner);
 
         if (actor && sendErrorMessage)
-            actor->GetSession()->SendNotification("The raid loot trade window for this item has expired.");
+            actor->GetSession()->SendNotification(u8"物品已超过2小时交易时效");
         return false;
     }
 
     if (!target || !IsEligibleLootTrader(target))
     {
         if (actor && sendErrorMessage)
-            actor->GetSession()->SendNotification("You can only trade this item with players who participated in the raid loot kill.");
+            actor->GetSession()->SendNotification(u8"你没有资格分配这件装备");
         return false;
     }
 

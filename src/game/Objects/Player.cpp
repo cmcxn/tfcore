@@ -6828,6 +6828,10 @@ void Player::RewardReputation(Unit* pVictim, float rate)
     if (!pVictim || pVictim->IsPlayer())
         return;
 
+    // === 新增：强制全额声望 ===
+    // 不管单人还是组队，AOE还是单杀，都获得全额声望
+    rate = 1.0f;
+
     // World of Warcraft Client Patch 1.10.0 (2006-03-28)
     // - Pets no longer modify your reputation if you kill them.
     if (pVictim->IsPet() && sWorld.GetWowPatch() >= WOW_PATCH_110)

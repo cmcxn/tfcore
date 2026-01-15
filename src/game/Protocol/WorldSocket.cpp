@@ -70,6 +70,7 @@ int WorldSocket::ProcessIncoming(WorldPacket* new_pct)
                     sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "WorldSocket::ProcessIncoming: Player send CMSG_AUTH_SESSION again");
                     return -1;
                 }
+
 #ifdef ENABLE_ELUNA
                 if (!sEluna->OnPacketReceive(m_Session, *new_pct))
                     return 0;
@@ -134,8 +135,48 @@ int WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
 
     // Read the content of the packet
     recvPacket >> clientBuild;
+
+    // ==== 修改：只允许42597版本客户端登录 ====
+   /*
+    if (clientBuild != 42597)
+    {
+        packet.Initialize(SMSG_AUTH_RESPONSE, 1);
+        packet << uint8(AUTH_VERSION_MISMATCH);
+
+        SendPacket(packet);
+
+        sLog.Out(LOG_BASIC, LOG_LVL_ERROR,
+            "WorldSocket::HandleAuthSession: Client version %u is not allowed. Only version 42597 is permitted. IP: %s",
+            clientBuild, GetRemoteAddress().c_str());
+        return -1;
+    }
+    // ==== 结束修改 ====
+
+    */
+
+    /*
+    // ==== 添加：禁止1.12.x版本客户端登录 ====
+    // 1.12.x版本范围：5875 (1.12.0) 到 6180 (1.12.3)
+    if (clientBuild >= 5875 && clientBuild <= 6180)
+    {
+        packet.Initialize(SMSG_AUTH_RESPONSE, 1);
+        packet << uint8(AUTH_VERSION_MISMATCH);
+
+        SendPacket(packet);
+
+        // 注意：此时account变量还没有从packet中读取，所以不能使用account变量
+        sLog.Out(LOG_BASIC, LOG_LVL_ERROR,
+            "WorldSocket::HandleAuthSession: 1.12.x client version (%u) is not allowed. IP: %s",
+            clientBuild, GetRemoteAddress().c_str());
+        return -1;
+    }
+    // ==== 结束添加 ====
+    */
+
     recvPacket >> serverId;
     recvPacket >> account;
+
+
 
     recvPacket >> clientSeed;
     recvPacket.read(digest, 20);
@@ -146,6 +187,8 @@ int WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
               account.c_str(),
               clientSeed);
 
+    // ==== 注释掉原始的版本检查 ====
+    
     // Check the version of client trying to connect
     if (!IsAcceptableClientBuild(clientBuild))
     {
@@ -157,6 +200,13 @@ int WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
         sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "WorldSocket::HandleAuthSession: Sent Auth Response (version mismatch).");
         return -1;
     }
+    
+
+    // 添加日志记录实际版本
+    sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL,
+        "[TEST MODE] Client connected with build: %u from %s",
+        clientBuild, GetRemoteAddress().c_str());
+    // ========== 临时测试结束 ==========
 
     // Get the account information from the realmd database
     std::string safe_account = account; // Duplicate, else will screw the SHA hash verification below

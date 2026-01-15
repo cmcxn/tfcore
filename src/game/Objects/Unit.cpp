@@ -930,6 +930,10 @@ uint32 Unit::DealDamage(Unit* pVictim, uint32 damage, CleanDamage const* cleanDa
 
 void Unit::Kill(Unit* pVictim, SpellEntry const* spellProto, bool durabilityLoss)
 {
+    // ★★★★★ 在这里添加死亡时移除红龙精华 ★★★★★
+    // 移除红龙精华（技能ID：23513）及其相关技能
+    pVictim->RemoveAurasDueToSpell(23513);  // Essence of the Red
+
     // find player: owner of controlled `this` or `this` itself maybe
     // for loot will be sued only if pGroupTap == nullptr
     Player* pPlayerTap = GetCharmerOrOwnerPlayerOrPlayerItself();
