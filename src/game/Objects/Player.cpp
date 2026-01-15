@@ -30,6 +30,7 @@
 #include "Log.h"
 #include "Opcodes.h"
 #include "SpellMgr.h"
+#include "Timer.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -1799,6 +1800,73 @@ void Player::OnDisconnected()
 
     // Player should be leave from channels
     CleanupChannels();
+}
+
+void Player::ResetAutoHealTracking(uint32 nowMs)
+{
+    m_autoHealWindowStartMs = nowMs;
+    m_autoHealCastCount = 0;
+    m_autoHealTargetSwitchCount = 0;
+    m_autoHealLastTargetSwitchMs = 0;
+    m_autoHealRapidSwitchCount = 0;
+    m_autoHealLastTargetGuid.Clear();
+}
+
+void Player::LogAutoHealIncident(std::string const& details) const
+{
+    if (GetSession())
+        sLog.Player(GetSession(), LOG_ANTICHEAT, "AutoHeal", LOG_LVL_MINIMAL, "%s", details.c_str());
+}
+
+void Player::UpdateAutoHealTracking(Unit const* target)
+{
+    if (!target || !GetSession() || GetSession()->GetSecurity() > SEC_PLAYER)
+        return;
+
+    constexpr uint32 kWindowMs = 60 * IN_MILLISECONDS;
+    constexpr uint32 kRapidSwitchMs = 1 * IN_MILLISECONDS;
+    constexpr uint32 kCastThreshold = 40;
+    constexpr uint32 kTargetSwitchThreshold = 10;
+    constexpr uint32 kViolationBanThreshold = 3;
+
+    uint32 nowMs = WorldTimer::getMSTime();
+    if (!m_autoHealWindowStartMs || WorldTimer::getMSTimeDiff(m_autoHealWindowStartMs, nowMs) > kWindowMs)
+        ResetAutoHealTracking(nowMs);
+
+    ++m_autoHealCastCount;
+
+    ObjectGuid targetGuid = target->GetObjectGuid();
+    if (m_autoHealLastTargetGuid && m_autoHealLastTargetGuid != targetGuid)
+    {
+        ++m_autoHealTargetSwitchCount;
+        if (m_autoHealLastTargetSwitchMs &&
+            WorldTimer::getMSTimeDiff(m_autoHealLastTargetSwitchMs, nowMs) < kRapidSwitchMs)
+        {
+            ++m_autoHealRapidSwitchCount;
+        }
+        m_autoHealLastTargetSwitchMs = nowMs;
+    }
+    m_autoHealLastTargetGuid = targetGuid;
+
+    if (m_autoHealCastCount < kCastThreshold || m_autoHealTargetSwitchCount < kTargetSwitchThreshold)
+        return;
+
+    std::ostringstream details;
+    details << "casts=" << m_autoHealCastCount
+            << " switches=" << m_autoHealTargetSwitchCount
+            << " rapid_switches=" << m_autoHealRapidSwitchCount
+            << " window_ms=" << kWindowMs;
+
+    LogAutoHealIncident(details.str());
+
+    uint32 action = CHEAT_ACTION_LOG | CHEAT_ACTION_REPORT_GMS;
+    if (++m_autoHealViolationCount >= kViolationBanThreshold)
+        action |= CHEAT_ACTION_BAN_ACCOUNT;
+
+    GetSession()->ProcessAnticheatAction("AutoHeal", details.str().c_str(), action,
+        sWorld.getConfig(CONFIG_UINT32_AC_MOVEMENT_BAN_DURATION));
+
+    ResetAutoHealTracking(nowMs);
 }
 
 void Player::RelocateToLastClientPosition()
